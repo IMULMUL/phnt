@@ -7,8 +7,6 @@
 #ifndef _NTWMI_H
 #define _NTWMI_H
 
-EXTERN_C_START
-
 #ifndef _TRACEHANDLE_DEFINED
 #define _TRACEHANDLE_DEFINED
 // Obsolete - prefer PROCESSTRACE_HANDLE or CONTROLTRACE_ID.
@@ -472,6 +470,23 @@ typedef enum _ETW_RT_EVENT_LOSS
    EtwRtEventLossMax
 } ETW_RT_EVENT_LOSS, *PETW_RT_EVENT_LOSS;
 
+//
+// Processor and logger ID context embedded in every ETW buffer.
+//
+//typedef struct _ETW_BUFFER_CONTEXT
+//{
+//    union
+//    {
+//        struct
+//        {
+//            UCHAR ProcessorNumber;
+//            UCHAR Alignment;
+//        };
+//        USHORT ProcessorIndex;
+//    };
+//    USHORT LoggerId;
+//} ETW_BUFFER_CONTEXT, *PETW_BUFFER_CONTEXT;
+
 typedef struct _WMI_BUFFER_HEADER *PWMI_BUFFER_HEADER;
 
 typedef struct _WMI_BUFFER_HEADER
@@ -514,16 +529,16 @@ typedef struct _WMI_BUFFER_HEADER
 } WMI_BUFFER_HEADER, *PWMI_BUFFER_HEADER;
 
 static_assert(sizeof(WMI_BUFFER_HEADER) == 0x48, "WMI_BUFFER_HEADER must equal 0x48");
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferSize) == 0x0);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, SavedOffset) == 0x4);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, CurrentOffset) == 0x8);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, TimeStamp) == 0x10);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, SlistEntry) == 0x20);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, ClientContext) == 0x28);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, State) == 0x2c); // Compression
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, Offset) == 0x30);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferFlag) == 0x34);
-C_ASSERT(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferType) == 0x36);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferSize) == 0x0);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, SavedOffset) == 0x4);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, CurrentOffset) == 0x8);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, TimeStamp) == 0x10);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, SlistEntry) == 0x20);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, ClientContext) == 0x28);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, State) == 0x2c); // Compression
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, Offset) == 0x30);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferFlag) == 0x34);
+static_assert(FIELD_OFFSET(WMI_BUFFER_HEADER, BufferType) == 0x36);
 
 typedef struct _TRACE_ENABLE_FLAG_EXTENSION
 {
@@ -569,6 +584,26 @@ typedef struct _ETW_STACK_CACHING_CONFIG
     ULONG BucketCount;
 } ETW_STACK_CACHING_CONFIG, *PETW_STACK_CACHING_CONFIG;
 
+//
+// Compact record of the last enable notification sent to a provider.
+//
+typedef struct _ETW_LAST_ENABLE_INFO
+{
+    ULONGLONG EnableFlags;  // MatchAnyKeyword (combined enable keyword mask)
+    USHORT LoggerId;
+    UCHAR Level;
+    union
+    {
+        struct
+        {
+            UCHAR Enabled : 1;
+            UCHAR InternalFlag : 7;
+        };
+        UCHAR AllFlags;
+    };
+    ULONG Reserved;
+} ETW_LAST_ENABLE_INFO, *PETW_LAST_ENABLE_INFO;
+
 #endif // ifndef ETW_WOW6432
 
 #define PERFINFO_APPLY_OFFSET_GIVING_TYPE(_Base, _Offset, _Type) ((_Type) (((PPERF_BYTE) (_Base)) + (_Offset)))
@@ -593,6 +628,15 @@ typedef struct _PERFINFO_GROUPMASK
 
 #define PERF_GET_MASK_INDEX(GM) (((GM) & PERF_MASK_INDEX) >> 29)
 #define PERF_GET_MASK_GROUP(GM) ((GM) & PERF_MASK_GROUP)
+
+// Event id packing in kernel system events is Group (bits 8..12) + Type (bits 0..7).
+// Disassembly evidence: EtwpLogKernelEvent indexes per-event state with (EventId & 0x1FFF).
+#define PERF_EVENT_TYPE_MASK    0x00FF
+#define PERF_EVENT_GROUP_MASK   0x1F00
+#define PERF_EVENT_ID_MASK      0x1FFF
+
+#define PERF_GET_EVENT_TYPE(x)  ((x) & PERF_EVENT_TYPE_MASK)
+#define PERF_GET_EVENT_GROUP(x) ((x) & PERF_EVENT_GROUP_MASK)
 
 #define PERFINFO_CLEAR_GROUPMASK(GroupMask) RtlZeroMemory((GroupMask), sizeof(PERFINFO_GROUPMASK))
 #define PERFINFO_OR_GROUP_WITH_GROUPMASK(Group, GroupMask) (GroupMask)->Masks[PERF_GET_MASK_INDEX(Group)] |= PERF_GET_MASK_GROUP(Group)
@@ -2669,13 +2713,16 @@ typedef struct _ETW_OBJECT_TYPE_EVENT
     WCHAR Name[ANYSIZE_ARRAY];
 } ETW_OBJECT_TYPE_EVENT, *PETW_OBJECT_TYPE_EVENT;
 
+#include <pshpack1.h>
 typedef struct _ETW_OBJECT_HANDLE_EVENT
 {
     PVOID Object;
     ULONG ProcessId;
     ULONG Handle;
     USHORT ObjectType;
+    WCHAR ObjectName[ANYSIZE_ARRAY];
 } ETW_OBJECT_HANDLE_EVENT, *PETW_OBJECT_HANDLE_EVENT;
+#include <poppack.h>
 
 typedef struct _ETW_REFDEREF_OBJECT_EVENT
 {
@@ -2711,9 +2758,7 @@ typedef struct _ETW_HEAP_EVENT_COMMON
     SYSTEM_TRACE_HEADER Header;    // Header
     PVOID Handle;                  // Handle of Heap
 } ETW_HEAP_EVENT_COMMON, *PETW_HEAP_EVENT_COMMON;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_ALLOC
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2723,9 +2768,7 @@ typedef struct _ETW_HEAP_EVENT_ALLOC
     ULONG Source;                   // Type ie Lookaside, Lowfrag or main path
 
 } ETW_HEAP_EVENT_ALLOC, *PETW_HEAP_EVENT_ALLOC;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_FREE
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2734,9 +2777,7 @@ typedef struct _ETW_HEAP_EVENT_FREE
     ULONG Source;                   // Type ie Lookaside, Lowfrag or main path
 
 } ETW_HEAP_EVENT_FREE, *PETW_HEAP_EVENT_FREE;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_REALLOC
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2747,9 +2788,7 @@ typedef struct _ETW_HEAP_EVENT_REALLOC
     SIZE_T OldSize;                 // Old Size in bytes
     ULONG Source;                   // Type ie Lookaside, Lowfrag or main path
 } ETW_HEAP_EVENT_REALLOC, *PETW_HEAP_EVENT_REALLOC;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_EXPANSION
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2762,9 +2801,7 @@ typedef struct _ETW_HEAP_EVENT_EXPANSION
     ULONG NoOfUCRs;                 // Number of uncommitted ranges
     SIZE_T AllocatedSpace;          // Memory allocated
 } ETW_HEAP_EVENT_EXPANSION, *PETW_HEAP_EVENT_EXPANSION;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_CONTRACTION
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2778,9 +2815,7 @@ typedef struct _ETW_HEAP_EVENT_CONTRACTION
     SIZE_T AllocatedSpace;          // Memory allocated
 
 } ETW_HEAP_EVENT_CONTRACTION, *PETW_HEAP_EVENT_CONTRACTION;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_CREATE
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2850,18 +2885,14 @@ typedef struct _HEAP_SUBSEGMENT_INIT
     SIZE_T BlockCount;
     ULONG AffinityIndex;
 } HEAP_SUBSEGMENT_INIT, *PHEAP_SUBSEGMENT_INIT;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _HEAP_AFFINITY_MANAGER_ENABLE
 {
     SYSTEM_TRACE_HEADER Header;
     PVOID HeapHandle;
     ULONG BucketIndex;
 } HEAP_AFFINITY_MANAGER_ENABLE, *PHEAP_AFFINITY_MANAGER_ENABLE;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _HEAP_AFFINITY_SLOT_ASSIGN
 {
     SYSTEM_TRACE_HEADER Header;
@@ -2869,9 +2900,7 @@ typedef struct _HEAP_AFFINITY_SLOT_ASSIGN
     PVOID SubSegment;
     ULONG SlotIndex;
 } HEAP_AFFINITY_SLOT_ASSIGN, *PHEAP_AFFINITY_SLOT_ASSIGN;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _HEAP_REUSE_THRESHOLD_ACTIVATED
 {
     SYSTEM_TRACE_HEADER Header;
@@ -2879,18 +2908,14 @@ typedef struct _HEAP_REUSE_THRESHOLD_ACTIVATED
     PVOID SubSegment;
     ULONG BucketIndex;
 } HEAP_REUSE_THRESHOLD_ACTIVATED, *PHEAP_REUSE_THRESHOLD_ACTIVATED;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _HEAP_SUBSEGMENT_ACTIVATED
 {
     SYSTEM_TRACE_HEADER Header;
     PVOID HeapHandle;
     PVOID SubSegment;
 } HEAP_SUBSEGMENT_ACTIVATED, *PHEAP_SUBSEGMENT_ACTIVATED;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_SNAPSHOT
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -2905,17 +2930,13 @@ typedef struct _ETW_HEAP_EVENT_SNAPSHOT
     ULONG UCRLength;
     SIZE_T AllocatedSpace;          // Total allocated space in heap, in bytes
 } ETW_HEAP_EVENT_SNAPSHOT, *PETW_HEAP_EVENT_SNAPSHOT;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_RUNDOWN_RANGE
 {
     PVOID Address;
     SIZE_T Size;
 } ETW_HEAP_EVENT_RUNDOWN_RANGE, *PETW_HEAP_EVENT_RUNDOWN_RANGE;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _ETW_HEAP_EVENT_RUNDOWN
 {
     SYSTEM_TRACE_HEADER Header;     // Header
@@ -3733,6 +3754,10 @@ DEFINE_GUID(  /* e46eead8-0c54-4489-9898-8fa79d059e0e */
 //    0xae, 0xfc, 0xdc, 0x0f, 0x1d, 0x2f, 0xd2, 0x35
 //    );
 
+/**
+ * The ETW class GUID for file I/O events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/fileio
+ */
 DEFINE_GUID( /* 90cbdc39-4a3e-11d1-84f4-0000f80464e3 */
     FileIoGuid,
     0x90cbdc39,
@@ -3741,6 +3766,10 @@ DEFINE_GUID( /* 90cbdc39-4a3e-11d1-84f4-0000f80464e3 */
     0x84, 0xf4, 0x00, 0x00, 0xf8, 0x04, 0x64, 0xe3
     );
 
+/**
+ * The ETW class GUID for image load events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/image
+ */
 DEFINE_GUID( /* 2cb15d1d-5fc1-11d2-abe1-00a0c911f518 */
     ImageLoadGuid,
     0x2cb15d1d,
@@ -3749,6 +3778,10 @@ DEFINE_GUID( /* 2cb15d1d-5fc1-11d2-abe1-00a0c911f518 */
     0xab, 0xe1, 0x00, 0xa0, 0xc9, 0x11, 0xf5, 0x18
     );
 
+/**
+ * The ETW class GUID for page fault events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/pagefault-v2
+ */
 DEFINE_GUID( /* 3d6fa8d3-fe05-11d0-9dda-00c04fd7ba7c */
     PageFaultGuid,
     0x3d6fa8d3,
@@ -3757,6 +3790,10 @@ DEFINE_GUID( /* 3d6fa8d3-fe05-11d0-9dda-00c04fd7ba7c */
     0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c
     );
 
+/**
+ * The ETW class GUID for registry events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/registry
+ */
 DEFINE_GUID( /* AE53722E-C863-11d2-8659-00C04FA321A1 */
     RegistryGuid,
     0xae53722e,
@@ -3765,6 +3802,10 @@ DEFINE_GUID( /* AE53722E-C863-11d2-8659-00C04FA321A1 */
     0x86, 0x59, 0x0, 0xc0, 0x4f, 0xa3, 0x21, 0xa1
     );
 
+/**
+ * The ETW class GUID for TCP/IP events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/tcpip
+ */
 DEFINE_GUID( /* 9a280ac0-c8e0-11d1-84e2-00c04fb998a2 */
     TcpIpGuid,
     0x9a280ac0,
@@ -3773,6 +3814,10 @@ DEFINE_GUID( /* 9a280ac0-c8e0-11d1-84e2-00c04fb998a2 */
     0x84, 0xe2, 0x00, 0xc0, 0x4f, 0xb9, 0x98, 0xa2
     );
 
+/**
+ * The ETW class GUID for thread events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/thread
+ */
 DEFINE_GUID( /* 3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c */
     ThreadGuid,
     0x3d6fa8d1,
@@ -3781,12 +3826,27 @@ DEFINE_GUID( /* 3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c */
     0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c
     );
 
+/**
+ * The ETW class GUID for UDP/IP events.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/etw/udpip
+ */
 DEFINE_GUID( /* bf3a50c5-a9c9-4988-a005-2df0b7c80f80 */
     UdpIpGuid,
     0xbf3a50c5,
     0xa9c9,
     0x4988,
     0xa0, 0x05, 0x2d, 0xf0, 0xb7, 0xc8, 0x0f, 0x80
+    );
+
+/**
+ * The ETW class GUID for Intel Processor Trace (IPT) events.
+ */
+DEFINE_GUID( /* ff1fd2fd-6008-42bb-9e75-00a20051f3be */
+    IptGuid,
+    0xff1fd2fd,
+    0x6008,
+    0x42bb,
+    0x9e, 0x75, 0x00, 0xa2, 0x00, 0x51, 0xf3, 0xbe
     );
 
 //
@@ -4030,17 +4090,13 @@ typedef struct _PERFINFO_DRIVER_MAJORFUNCTION
     PVOID Irp;
     ULONG UniqMatchId;
 } PERFINFO_DRIVER_MAJORFUNCTION, *PPERFINFO_DRIVER_MAJORFUNCTION;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _PERFINFO_DRIVER_MAJORFUNCTION_RET
 {
     PVOID Irp;
     ULONG UniqMatchId;
 } PERFINFO_DRIVER_MAJORFUNCTION_RET, *PPERFINFO_DRIVER_MAJORFUNCTION_RET;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _PERFINFO_DRIVER_COMPLETE_REQUEST
 {
     //
@@ -4060,9 +4116,7 @@ typedef struct _PERFINFO_DRIVER_COMPLETE_REQUEST
     ULONG UniqMatchId;
 
 } PERFINFO_DRIVER_COMPLETE_REQUEST, *PPERFINFO_DRIVER_COMPLETE_REQUEST;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _PERFINFO_DRIVER_COMPLETE_REQUEST_RET
 {
     //
@@ -4072,9 +4126,7 @@ typedef struct _PERFINFO_DRIVER_COMPLETE_REQUEST_RET
     PVOID Irp;
     ULONG UniqMatchId;
 } PERFINFO_DRIVER_COMPLETE_REQUEST_RET, *PPERFINFO_DRIVER_COMPLETE_REQUEST_RET;
-#include <poppack.h>
 
-#include <pshpack1.h>
 typedef struct _PERFINFO_DRIVER_COMPLETIONROUTINE
 {
     PVOID Routine;
@@ -4381,16 +4433,17 @@ typedef struct _PERFINFO_PPM_IDLE_EXIT_LATENCY
 
 typedef struct _PERFINFO_PPM_PERF_STATE_CHANGE
 {
-  ULONG Type;
-  ULONG NewState;
-  ULONG OldState;
-  NTSTATUS Result;
-  ULONG64 Processors;
+    ULONG Type;
+    ULONG NewState;
+    ULONG OldState;
+    NTSTATUS Result;
+    ULONG64 Processors;
 } PERFINFO_PPM_PERF_STATE_CHANGE, *PPERFINFO_PPM_PERF_STATE_CHANGE;
 
-typedef struct _PERFINFO_PPM_THERMAL_CONSTRAINT{
-  ULONG Constraint;
-  ULONG64 Processors;
+typedef struct _PERFINFO_PPM_THERMAL_CONSTRAINT
+{
+    ULONG Constraint;
+    ULONG64 Processors;
 } PERFINFO_PPM_THERMAL_CONSTRAINT, *PPERFINFO_PPM_THERMAL_CONSTRAINT;
 
 //
@@ -4585,7 +4638,7 @@ typedef enum _PERFINFO_KERNELMEMORY_USAGE_TYPE
     PerfInfoMemUsageMax
 } PERFINFO_KERNELMEMORY_USAGE_TYPE, *PPERFINFO_KERNELMEMORY_USAGE_TYPE;
 
-C_ASSERT(PerfInfoMemUsageMax <= (1 << PERFINFO_MM_KERNELMEMORY_USAGE_TYPE_BITS));
+static_assert(PerfInfoMemUsageMax <= (1 << PERFINFO_MM_KERNELMEMORY_USAGE_TYPE_BITS));
 
 typedef struct _PERFINFO_KERNELMEMORY_RANGE_USAGE
 {
@@ -4605,7 +4658,7 @@ typedef enum _PERFINFO_MM_STAT
     PerfInfoMMStatMax
 } PERFINFO_MM_STAT, *PPERFINFO_MM_STAT;
 
-C_ASSERT(PerfInfoMMStatMax <= (1 << PERFINFO_MM_STAT_TYPE_BITS));
+static_assert(PerfInfoMMStatMax <= (1 << PERFINFO_MM_STAT_TYPE_BITS));
 
 //
 // This is logged as part of the end rundown.
@@ -5122,17 +5175,17 @@ typedef struct _PERFINFO_DEBUG_EVENT
 //
 
 #define PERFINFO_CCSWAP_BIT_FULL_TS     30
-C_ASSERT (PERFINFO_CCSWAP_BIT_FULL_TS == (32 - PERFINFO_CCSWAP_BIT_TYPE));
+static_assert (PERFINFO_CCSWAP_BIT_FULL_TS == (32 - PERFINFO_CCSWAP_BIT_TYPE));
 
 #define PERFINFO_CCSWAP_BIT_SHORT_TS    14
-C_ASSERT(PERFINFO_CCSWAP_BIT_SHORT_TS == (16 - PERFINFO_CCSWAP_BIT_TYPE));
+static_assert(PERFINFO_CCSWAP_BIT_SHORT_TS == (16 - PERFINFO_CCSWAP_BIT_TYPE));
 
 #define PERFINFO_CCSWAP_BIT_SMALL_TS    17
-C_ASSERT (PERFINFO_CCSWAP_BIT_SMALL_TS ==
+static_assert(PERFINFO_CCSWAP_BIT_SMALL_TS ==
           (32 - PERFINFO_CCSWAP_BIT_TYPE - PERFINFO_CCSWAP_BIT_TID - PERFINFO_CCSWAP_BIT_PRI_INC - PERFINFO_CCSWAP_BIT_STATE_WR));
 
 #define PERFINFO_CCSWAP_BIT_WAIT_TIME   17
-C_ASSERT (PERFINFO_CCSWAP_BIT_WAIT_TIME ==
+static_assert(PERFINFO_CCSWAP_BIT_WAIT_TIME ==
           (32 - PERFINFO_CCSWAP_BIT_TID - PERFINFO_CCSWAP_BIT_STATE_WR - PERFINFO_CCSWAP_BIT_PRIORITY));
 
 //
@@ -5342,7 +5395,7 @@ typedef struct _PERFINFO_IO_TIMER
 #define TLG_KERNEL_PSPROV_KEYWORD_UTC       0x00000002
 
 //
-// Logger configuration and running statistics. This structure is used
+// Logger configuration and statistics.
 //
 
 typedef struct _WMI_LOGGER_INFORMATION
@@ -5355,67 +5408,157 @@ typedef struct _WMI_LOGGER_INFORMATION
     ULONG LogFileMode;                  // sequential, circular
     ULONG FlushTimer;                   // buffer flush timer, in seconds
     ULONG EnableFlags;                  // trace enable flags
+
     union
     {
-        LONG  AgeLimit;                 // aging decay time, in minutes
+        LONG AgeLimit;                  // aging decay time, in minutes
         LONG FlushThreshold;            // Number of buffers to fill before flushing
     } DUMMYUNIONNAME;
-    ULONG Wow;                          // TRUE if the logger started under WOW64
+
     union
     {
-        HANDLE  LogFileHandle;          // handle to logfile
-        ULONG64 LogFileHandle64;
+        struct
+        {
+            ULONG Wow : 1;              // TRUE if the logger started under WOW64
+            ULONG QpcDeltaTracking : 1;
+            ULONG LargeMdlPages : 1;
+            ULONG ExcludeKernelStack : 1;
+        };
+        ULONG64 V2Options;
     } DUMMYUNIONNAME2;
+
+    union
+    {
+        HANDLE  LogFileHandle;          // Handle to logfile
+        ULONG64 LogFileHandle64;
+    } DUMMYUNIONNAME3;
+
     union
     {
         ULONG NumberOfBuffers;          // no of buffers in use
         ULONG InstanceCount;            // Number of Provider Instances
-    } DUMMYUNIONNAME3;
+    } DUMMYUNIONNAME4;
+
     union
     {
         ULONG FreeBuffers;              // no of buffers free
         ULONG InstanceId;               // Current Provider's Id for UmLogger
-    } DUMMYUNIONNAME4;
+    } DUMMYUNIONNAME5;
+
     union
     {
         ULONG EventsLost;               // event records lost
         ULONG NumberOfProcessors;       // Passed on to UmLogger
-    } DUMMYUNIONNAME5;
+    } DUMMYUNIONNAME6;
+
     ULONG BuffersWritten;               // no of buffers written to file
+
     union
     {
         ULONG LogBuffersLost;           // no of logfile write failures
         ULONG Flags;                    // internal flags
-    } DUMMYUNIONNAME6;
+    } DUMMYUNIONNAME7;
 
     ULONG RealTimeBuffersLost;          // no of rt delivery failures
+
     union
     {
         HANDLE  LoggerThreadId;         // thread id of Logger
         ULONG64 LoggerThreadId64;       // thread is of Logger
-    } DUMMYUNIONNAME7;
+    } DUMMYUNIONNAME8;
+
     union
     {
         UNICODE_STRING LogFileName;     // used only in WIN64
         UNICODE_STRING64 LogFileName64; // Logfile name: only in WIN32
-    } DUMMYUNIONNAME8;
+    } DUMMYUNIONNAME9;
 
-    // mandatory data provided by caller
     union
     {
         UNICODE_STRING LoggerName;      // Logger instance name in WIN64
         UNICODE_STRING64 LoggerName64;  // Logger Instance name in WIN32
-    } DUMMYUNIONNAME9;
+    };
 
     ULONG RealTimeConsumerCount;        // Number of rt consumers
-    ULONG SpareUlong;
+
+    ULONG SequenceNumber;
 
     union
     {
         PVOID   LoggerExtension;
         ULONG64 LoggerExtension64;
-    } DUMMYUNIONNAME10;
+    };
 } WMI_LOGGER_INFORMATION, *PWMI_LOGGER_INFORMATION;
+
+//
+// ETW time structure (kernel-internal variant of SYSTEMTIME).
+//
+typedef struct _ETW_SYSTEMTIME
+{
+    USHORT Year;
+    USHORT Month;
+    USHORT DayOfWeek;
+    USHORT Day;
+    USHORT Hour;
+    USHORT Minute;
+    USHORT Second;
+    USHORT Milliseconds;
+} ETW_SYSTEMTIME, *PETW_SYSTEMTIME;
+
+//
+// ETW system logger slot (one entry per kernel session slot).
+//
+typedef struct _ETW_SYSTEM_LOGGER
+{
+    UCHAR LoggerId;
+    UCHAR ClockType;
+} ETW_SYSTEM_LOGGER, *PETW_SYSTEM_LOGGER;
+
+//
+// ETW system-wide logger settings (silo-aware). Size = 372 bytes.
+//
+typedef struct _ETW_SYSTEM_LOGGER_SETTINGS
+{
+    ETW_SYSTEM_LOGGER EtwpSystemLogger[8];          // +0x000 (16 bytes)
+    volatile ULONG EtwpActiveSystemLoggers;         // +0x010
+    PERFINFO_GROUPMASK SiloGlobalGroupMask;         // +0x014 (32 bytes)
+    PERFINFO_GROUPMASK EtwpGroupMasks[10];          // +0x034 (320 bytes)
+} ETW_SYSTEM_LOGGER_SETTINGS, *PETW_SYSTEM_LOGGER_SETTINGS;
+
+//
+// ETW boot logger configuration.
+//
+typedef struct _ETW_BOOT_CONFIG
+{
+    ULONG MaxLoggers;
+    ULONG Reserved;
+    LIST_ENTRY BootLoggersList;
+} ETW_BOOT_CONFIG, *PETW_BOOT_CONFIG;
+
+//
+// ETW global performance counters.
+//
+typedef struct _ETW_PERF_COUNTERS
+{
+    LONG TotalActiveSessions;
+    LONG TotalBufferMemoryNonPagedPool;
+    LONG TotalBufferMemoryPagedPool;
+    LONG TotalGuidsEnabled;
+    LONG TotalGuidsNotEnabled;
+    LONG TotalGuidsPreEnabled;
+} ETW_PERF_COUNTERS, *PETW_PERF_COUNTERS;
+
+//
+// ETW per-session performance counters.
+//
+typedef struct _ETW_SESSION_PERF_COUNTERS
+{
+    LONG BufferMemoryPagedPool;
+    LONG BufferMemoryNonPagedPool;
+    ULONGLONG EventsLoggedCount;
+    LONG EventsLost;
+    LONG NumConsumers;
+} ETW_SESSION_PERF_COUNTERS, *PETW_SESSION_PERF_COUNTERS;
 
 #define ETW_SYSTEM_EVENT_VERSION_MASK        0x000000FF
 #define ETW_GET_SYSTEM_EVENT_VERSION(X)      ((X) & ETW_SYSTEM_EVENT_VERSION_MASK)
@@ -5444,6 +5587,12 @@ typedef struct _WMI_LOGGER_INFORMATION
 #define ETW_NT_FLAGS_USE_NATIVE_HEADER       0x40000000   // Use native header for WOW64
 #define ETW_NT_FLAGS_WOW64_CALL              0x80000000   // For use by WOW (Internal)
 
+#define ETW_NT_FLAGS_TRACE_SYSTEM_V1         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V1)
+#define ETW_NT_FLAGS_TRACE_SYSTEM_V2         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V2)
+#define ETW_NT_FLAGS_TRACE_SYSTEM_V3         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V3)
+#define ETW_NT_FLAGS_TRACE_SYSTEM_V4         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V4)
+#define ETW_NT_FLAGS_TRACE_SYSTEM_V5         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V5)
+
 #define ETW_NT_FLAGS_TRACE_RUNDOWN_V2 (ETW_NT_FLAGS_TRACE_SYSTEM_V2 | ETW_NT_FLAGS_USE_NATIVE_HEADER)  // Rundown and SysConfig events
 #define ETW_NT_FLAGS_TRACE_RUNDOWN_V3 (ETW_NT_FLAGS_TRACE_SYSTEM_V3 | ETW_NT_FLAGS_USE_NATIVE_HEADER)  // Rundown and SysConfig events
 #define ETW_NT_FLAGS_TRACE_RUNDOWN_V4 (ETW_NT_FLAGS_TRACE_SYSTEM_V4 | ETW_NT_FLAGS_USE_NATIVE_HEADER)  // Rundown and SysConfig events
@@ -5460,12 +5609,6 @@ typedef struct _WMI_LOGGER_INFORMATION
 
 #define ETW_SKIP_USER_FRAMES(X)              ((X) << ETW_USER_FRAMES_TO_SKIP_SHIFT)
 #define ETW_USER_EVENT_WITH_STACKWALK(X)     (ETW_NT_FLAGS_TRACE_SYSTEM_V2| ETW_SKIP_USER_FRAMES(X))
-
-#define ETW_NT_FLAGS_TRACE_SYSTEM_V1         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V1)
-#define ETW_NT_FLAGS_TRACE_SYSTEM_V2         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V2)
-#define ETW_NT_FLAGS_TRACE_SYSTEM_V3         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V3)
-#define ETW_NT_FLAGS_TRACE_SYSTEM_V4         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V4)
-#define ETW_NT_FLAGS_TRACE_SYSTEM_V5         (ETW_NT_FLAGS_TRACE_SYSTEM | ETW_SYSTEM_EVENT_V5)
 
 // Constants for UMGL (User Mode Global Logging).
 //
@@ -5634,10 +5777,12 @@ typedef struct _ETW_NOTIFICATION_HEADER
     GUID                  SourceGuid;       // Source GUID
 } ETW_NOTIFICATION_HEADER, *PETW_NOTIFICATION_HEADER;
 
-typedef ULONG (NTAPI *PETW_NOTIFICATION_CALLBACK)(
+typedef _Function_class_(ETW_NOTIFICATION_CALLBACK)
+ULONG NTAPI ETW_NOTIFICATION_CALLBACK(
     _In_ PETW_NOTIFICATION_HEADER NotificationHeader,
     _In_ PVOID Context
     );
+typedef ETW_NOTIFICATION_CALLBACK *PETW_NOTIFICATION_CALLBACK;
 
 typedef enum _ETW_SESSION_NOTIFICATION_TYPE
 {
@@ -5920,55 +6065,180 @@ typedef struct _ETW_TRACE_GUID_INFO
 } ETW_TRACE_GUID_INFO, *PETW_TRACE_GUID_INFO;
 
 // rev
+typedef struct _ETW_UPDATE_DISALLOW_LIST_INFORMATION
+{
+    ULONG LoggerId;
+    ULONG GuidCount;
+    GUID GuidList[ANYSIZE_ARRAY];
+} ETW_UPDATE_DISALLOW_LIST_INFORMATION, *PETW_UPDATE_DISALLOW_LIST_INFORMATION;
+
+// rev
+typedef struct _ETW_GET_DISALLOW_LIST_INFORMATION
+{
+    ULONG LoggerId;
+    ULONG Reserved;
+} ETW_GET_DISALLOW_LIST_INFORMATION, *PETW_GET_DISALLOW_LIST_INFORMATION;
+
+// rev
+typedef struct _ETW_SET_COMPRESSION_SETTINGS_INFORMATION
+{
+    ULONG LoggerId;
+    ULONG Field4;
+    ULONG Field8;
+    ULONG FieldC;
+} ETW_SET_COMPRESSION_SETTINGS_INFORMATION, *PETW_SET_COMPRESSION_SETTINGS_INFORMATION;
+
+// rev
+typedef struct _ETW_GET_COMPRESSION_SETTINGS_INFORMATION
+{
+    USHORT LoggerId;
+    USHORT Reserved0;
+    ULONG Reserved4;
+} ETW_GET_COMPRESSION_SETTINGS_INFORMATION, *PETW_GET_COMPRESSION_SETTINGS_INFORMATION;
+
+// rev
+typedef struct _ETW_COMPRESSION_SETTINGS_DATA
+{
+    ULONG LoggerId;
+    ULONG Field4;
+    ULONG Field8;
+    ULONG FieldC;
+} ETW_COMPRESSION_SETTINGS_DATA, *PETW_COMPRESSION_SETTINGS_DATA;
+
+// rev
+typedef struct _ETW_UPDATE_PERIODIC_CAPTURE_STATE_INFORMATION
+{
+    ULONG LoggerId;
+    ULONG CaptureInterval;
+    USHORT GuidCount;
+    USHORT Reserved;
+    GUID GuidList[ANYSIZE_ARRAY];
+} ETW_UPDATE_PERIODIC_CAPTURE_STATE_INFORMATION, *PETW_UPDATE_PERIODIC_CAPTURE_STATE_INFORMATION;
+
+// rev
+typedef struct _ETW_PRIVATE_SESSION_TRACE_REQUEST
+{
+    ULONG ProcessId;
+    union
+    {
+        ULONG Value;
+        struct
+        {
+            USHORT PrivateSessionId;
+            USHORT PrivateSessionVersion;
+        } DUMMYSTRUCTNAME;
+    } DUMMYUNIONNAME;
+} ETW_PRIVATE_SESSION_TRACE_REQUEST, *PETW_PRIVATE_SESSION_TRACE_REQUEST;
+
+// rev
+typedef struct _ETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION
+{
+    ETW_PRIVATE_SESSION_TRACE_REQUEST Requests[ANYSIZE_ARRAY];
+} ETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION, *PETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION;
+
+// rev
+typedef struct _ETW_REGISTER_PRIVATE_SESSION_INFORMATION
+{
+    union
+    {
+        struct
+        {
+            USHORT PrivateSessionId;
+            USHORT Reserved0;
+        } DUMMYSTRUCTNAME;
+        ULONG SessionDemuxHandle;
+    } DUMMYUNIONNAME;
+    USHORT PrivateSessionHandle;
+    USHORT Reserved4;
+} ETW_REGISTER_PRIVATE_SESSION_INFORMATION, *PETW_REGISTER_PRIVATE_SESSION_INFORMATION;
+
+// rev
+typedef struct _ETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION
+{
+    union
+    {
+        HANDLE SessionDemuxHandle;
+        USHORT PrivateSessionHandle;
+    } DUMMYUNIONNAME;
+} ETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION, *PETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION;
+
+// rev
+typedef struct _ETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION
+{
+    ULONG LoggerId;
+    BOOLEAN Enable;
+    UCHAR Reserved1[3];
+} ETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION, *PETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION;
+
+// rev
+typedef struct _ETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION
+{
+    USHORT LoggerId;
+    USHORT Reserved;
+    ULONG Reserved2;
+} ETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION, *PETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION;
+
+static_assert(sizeof(ETW_GET_DISALLOW_LIST_INFORMATION) == 8, "ETW_GET_DISALLOW_LIST_INFORMATION");
+static_assert(sizeof(ETW_SET_COMPRESSION_SETTINGS_INFORMATION) == 16, "ETW_SET_COMPRESSION_SETTINGS_INFORMATION");
+static_assert(sizeof(ETW_GET_COMPRESSION_SETTINGS_INFORMATION) == 8, "ETW_GET_COMPRESSION_SETTINGS_INFORMATION");
+static_assert(sizeof(ETW_COMPRESSION_SETTINGS_DATA) == 16, "ETW_COMPRESSION_SETTINGS_DATA");
+static_assert(sizeof(ETW_PRIVATE_SESSION_TRACE_REQUEST) == 8, "ETW_PRIVATE_SESSION_TRACE_REQUEST");
+static_assert(sizeof(ETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION) == 8, "ETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION");
+static_assert(sizeof(ETW_REGISTER_PRIVATE_SESSION_INFORMATION) == 8, "ETW_REGISTER_PRIVATE_SESSION_INFORMATION");
+static_assert(sizeof(ETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION) == sizeof(HANDLE), "ETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION");
+static_assert(sizeof(ETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION) == 8, "ETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION");
+static_assert(sizeof(ETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION) == 8, "ETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION");
+
+// rev
 typedef enum _ETWTRACECONTROLCODE
 {
-    EtwStartLoggerCode = 1, // inout WMI_LOGGER_INFORMATION
-    EtwStopLoggerCode = 2, // inout WMI_LOGGER_INFORMATION
-    EtwQueryLoggerCode = 3, // inout WMI_LOGGER_INFORMATION
-    EtwUpdateLoggerCode = 4, // inout WMI_LOGGER_INFORMATION
-    EtwFlushLoggerCode = 5, // inout WMI_LOGGER_INFORMATION
-    EtwIncrementLoggerFile = 6, // inout WMI_LOGGER_INFORMATION
-    EtwRealtimeTransition = 7, // inout WMI_LOGGER_INFORMATION
+    EtwStartLoggerCode = 1,                         // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwStopLoggerCode = 2,                          // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwQueryLoggerCode = 3,                         // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwUpdateLoggerCode = 4,                        // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwFlushLoggerCode = 5,                         // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwIncrementLoggerFile = 6,                     // inout WMI_LOGGER_INFORMATION (>= 0xB0)
+    EtwRealtimeTransition = 7,                      // inout WMI_LOGGER_INFORMATION (>= 0xB0)
     // reserved
-    EtwRealtimeConnectCode = 11,
-    EtwActivityIdCreate = 12,
-    EtwWdiScenarioCode = 13,
-    EtwRealtimeDisconnectCode = 14, // in HANDLE
-    EtwRegisterGuidsCode = 15,
-    EtwReceiveNotification = 16,
-    EtwSendDataBlock = 17, // ETW_ENABLE_NOTIFICATION_PACKET // ETW_SESSION_NOTIFICATION_PACKET
-    EtwSendReplyDataBlock = 18,
-    EtwReceiveReplyDataBlock = 19,
-    EtwWdiSemUpdate = 20,
-    EtwEnumTraceGuidList = 21, // out GUID[]
-    EtwGetTraceGuidInfo = 22, // in GUID, out ETW_TRACE_GUID_INFO
-    EtwEnumerateTraceGuids = 23, // out TRACE_GUID_PROPERTIES[]
-    EtwRegisterSecurityProv = 24,
-    EtwReferenceTimeCode = 25, // in ULONG LoggerId, out ETW_REF_CLOCK
-    EtwTrackBinaryCode = 26, // in HANDLE
-    EtwAddNotificationEvent = 27,
-    EtwUpdateDisallowList = 28,
-    EtwSetEnableAllKeywordsCode = 29,
-    EtwSetProviderTraitsCode = 30,
-    EtwUseDescriptorTypeCode = 31,
-    EtwEnumTraceGroupList = 32,
-    EtwGetTraceGroupInfo = 33,
-    EtwGetDisallowList = 34,
-    EtwSetCompressionSettings = 35,
-    EtwGetCompressionSettings = 36,
-    EtwUpdatePeriodicCaptureState = 37,
-    EtwGetPrivateSessionTraceHandle = 38,
-    EtwRegisterPrivateSession = 39,
-    EtwQuerySessionDemuxObject = 40,
-    EtwSetProviderBinaryTracking = 41,
-    EtwMaxLoggers = 42, // out ULONG
-    EtwMaxPmcCounter = 43, // out ULONG
-    EtwQueryUsedProcessorCount = 44, // ULONG // since WIN11
-    EtwGetPmcOwnership = 45,
-    EtwGetPmcSessions = 46,
+    EtwRealtimeConnectCode = 11,                    // inout 0x60-byte realtime connect buffer
+    EtwActivityIdCreate = 12,                       // out GUID
+    EtwWdiScenarioCode = 13,                        // in 0x30-byte WDI control buffer
+    EtwRealtimeDisconnectCode = 14,                 // in HANDLE
+    EtwRegisterGuidsCode = 15,                      // in 0xA0-byte registration header, out provider reply buffer (>= 0xA0)
+    EtwReceiveNotification = 16,                    // out ETW_NOTIFICATION_HEADER + payload (72..65536 bytes)
+    EtwSendDataBlock = 17,                          // in ETW_ENABLE_NOTIFICATION_PACKET, out ETW_SESSION_NOTIFICATION_PACKET (0x48)
+    EtwSendReplyDataBlock = 18,                     // in ETW_NOTIFICATION_HEADER + payload
+    EtwReceiveReplyDataBlock = 19,                  // in HANDLE, out reply data block
+    EtwWdiSemUpdate = 20,                           // no input/output buffers
+    EtwEnumTraceGuidList = 21,                      // out GUID[]
+    EtwGetTraceGuidInfo = 22,                       // in GUID, out ETW_TRACE_GUID_INFO + instances
+    EtwEnumerateTraceGuids = 23,                    // out TRACE_GUID_PROPERTIES[]
+    EtwRegisterSecurityProv = 24,                   // no input/output buffers
+    EtwReferenceTimeCode = 25,                      // in ULONG LoggerId, out ETW_REF_CLOCK
+    EtwTrackBinaryCode = 26,                        // in HANDLE
+    EtwAddNotificationEvent = 27,                   // in HANDLE
+    EtwUpdateDisallowList = 28,                     // in ETW_UPDATE_DISALLOW_LIST_INFORMATION
+    EtwSetEnableAllKeywordsCode = 29,               // reserved/unsupported in current NtTraceControl switch
+    EtwSetProviderTraitsCode = 30,                  // in provider traits header (0x18), out traits reply buffer (>= 0x78)
+    EtwUseDescriptorTypeCode = 31,                  // in 0x10-byte descriptor-type control
+    EtwEnumTraceGroupList = 32,                     // out GUID[]
+    EtwGetTraceGroupInfo = 33,                      // in GUID, out group info buffer
+    EtwGetDisallowList = 34,                        // in ETW_GET_DISALLOW_LIST_INFORMATION, out variable-size disallow list
+    EtwSetCompressionSettings = 35,                 // in ETW_SET_COMPRESSION_SETTINGS_INFORMATION
+    EtwGetCompressionSettings = 36,                 // in ETW_GET_COMPRESSION_SETTINGS_INFORMATION, out ETW_COMPRESSION_SETTINGS_DATA
+    EtwUpdatePeriodicCaptureState = 37,             // in ETW_UPDATE_PERIODIC_CAPTURE_STATE_INFORMATION
+    EtwGetPrivateSessionTraceHandle = 38,           // in ETW_GET_PRIVATE_SESSION_TRACE_HANDLE_INFORMATION, out USHORT PrivateSessionHandle
+    EtwRegisterPrivateSession = 39,                 // inout ETW_REGISTER_PRIVATE_SESSION_INFORMATION
+    EtwQuerySessionDemuxObject = 40,                // inout ETW_QUERY_SESSION_DEMUX_OBJECT_INFORMATION
+    EtwSetProviderBinaryTracking = 41,              // in ETW_SET_PROVIDER_BINARY_TRACKING_INFORMATION
+    EtwMaxLoggers = 42,                             // out ULONG
+    EtwMaxPmcCounter = 43,                          // out ULONG
+    EtwQueryUsedProcessorCount = 44,                // in ETW_QUERY_USED_PROCESSOR_COUNT_INFORMATION (LoggerId), out ULONG // since WIN11
+    EtwGetPmcOwnership = 45,                        // out variable-size PMC ownership buffer
+    EtwGetPmcSessions = 46,                         // out variable-size PMC session buffer
+    EtwTraceControlMax = 47,
 } ETWTRACECONTROLCODE;
 
-#if (PHNT_VERSION >= PHNT_WINDOWS_VISTA)
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -5980,9 +6250,7 @@ NtTraceControl(
     _In_ ULONG OutputBufferLength,
     _Out_ PULONG ReturnLength
     );
-#endif
 
-#if (PHNT_VERSION >= PHNT_WINDOWS_XP)
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -5992,12 +6260,11 @@ NtTraceEvent(
     _In_ ULONG FieldSize,
     _In_ PVOID Fields
     );
-#endif
 
 // private
 typedef struct _TELEMETRY_COVERAGE_POINT
 {
-    PWSTR Name;
+    PSTR Name;
     ULONG Hash;
     ULONG LastCoveredRound;
     ULONG Flags;
@@ -6199,8 +6466,8 @@ WmiExecuteMethodW(
 #define NOTIFICATION_LIGHTWEIGHT_FLAG 0x00000020
 
 // Event notification callback function prototype
-_Function_class_(NOTIFICATIONCALLBACK)
-typedef void (WINAPI NOTIFICATIONCALLBACK)(
+typedef _Function_class_(NOTIFICATIONCALLBACK)
+VOID NTAPI NOTIFICATIONCALLBACK(
     _In_ PWNODE_HEADER Wnode,
     _In_ ULONG_PTR NotificationContext
     );
@@ -6396,6 +6663,4 @@ WmiFreeBuffer(
     _In_ PVOID Buffer
     );
 
-EXTERN_C_END
-
-#endif
+#endif // _NTWMI_H
